@@ -35,13 +35,15 @@ logger = logging.getLogger(__name__)
 class IAMToIdentityCenterMigration:
     """Main class for handling IAM to Identity Center migration."""
     
-    def __init__(self, region='us-east-1', dry_run=False):
+    def __init__(self, region='us-east-1', dry_run=False, instance_arn=None, identity_store_id=None):
         """
         Initialize the migration tool.
         
         Args:
             region: AWS region for Identity Center
             dry_run: If True, only simulate the migration without making changes
+            instance_arn: Optional Identity Center instance ARN (auto-detected if not provided)
+            identity_store_id: Optional Identity Store ID (auto-detected if not provided)
         """
         self.region = region
         self.dry_run = dry_run
@@ -52,26 +54,48 @@ class IAMToIdentityCenterMigration:
         self.identitystore_client = boto3.client('identitystore', region_name=region)
         self.organizations_client = boto3.client('organizations')
         
-        # Get Identity Center instance
-        self.instance_arn = None
-        self.identity_store_id = None
+        # Get Identity Center instance (use provided values or auto-detect)
+        self.instance_arn = instance_arn
+        self.identity_store_id = identity_store_id
         self._get_identity_center_instance()
         
     def _get_identity_center_instance(self):
         """Get the Identity Center instance ARN and Identity Store ID."""
+        # Check if only one parameter is provided (should provide both or none)
+        if bool(self.instance_arn) != bool(self.identity_store_id):
+            if self.instance_arn:
+                logger.warning("--instance-arn provided but --identity-store-id missing. Will try to auto-detect identity-store-id.")
+            else:
+                logger.warning("--identity-store-id provided but --instance-arn missing. Will try to auto-detect instance-arn.")
+        
+        # If both instance_arn and identity_store_id are provided, use them directly
+        if self.instance_arn and self.identity_store_id:
+            logger.info(f"Using provided Identity Center instance: {self.instance_arn}")
+            logger.info(f"Using provided Identity Store ID: {self.identity_store_id}")
+            return
+        
+        # Auto-detect if not provided (or partially provided)
         try:
             response = self.sso_admin_client.list_instances()
             if response['Instances']:
                 instance = response['Instances'][0]
-                self.instance_arn = instance['InstanceArn']
-                self.identity_store_id = instance['IdentityStoreId']
-                logger.info(f"Found Identity Center instance: {self.instance_arn}")
-                logger.info(f"Identity Store ID: {self.identity_store_id}")
+                if not self.instance_arn:
+                    self.instance_arn = instance['InstanceArn']
+                    logger.info(f"Auto-detected Identity Center instance: {self.instance_arn}")
+                else:
+                    logger.info(f"Using provided Identity Center instance: {self.instance_arn}")
+                    
+                if not self.identity_store_id:
+                    self.identity_store_id = instance['IdentityStoreId']
+                    logger.info(f"Auto-detected Identity Store ID: {self.identity_store_id}")
+                else:
+                    logger.info(f"Using provided Identity Store ID: {self.identity_store_id}")
             else:
-                logger.error("No Identity Center instance found. Please enable Identity Center first.")
+                logger.error("No Identity Center instance found. Please enable Identity Center first or provide --instance-arn and --identity-store-id.")
                 sys.exit(1)
         except ClientError as e:
             logger.error(f"Error getting Identity Center instance: {e}")
+            logger.error("You can manually specify --instance-arn and --identity-store-id to bypass auto-detection.")
             sys.exit(1)
     
     def get_iam_groups(self, group_names=None):
@@ -714,6 +738,9 @@ Examples:
 
   # Full migration with separate permission sets per policy
   python migrate_iam_to_identity_center.py --separate-permission-sets
+
+  # Specify Identity Center instance manually
+  python migrate_iam_to_identity_center.py --instance-arn arn:aws:sso:::instance/ssoins-1234567890abcdef --identity-store-id d-1234567890
         """
     )
     
@@ -721,6 +748,16 @@ Examples:
         '--region', '-r',
         default='us-east-1',
         help='AWS region for Identity Center (default: us-east-1)'
+    )
+    
+    parser.add_argument(
+        '--instance-arn',
+        help='Identity Center instance ARN (auto-detected if not provided). Example: arn:aws:sso:::instance/ssoins-1234567890abcdef'
+    )
+    
+    parser.add_argument(
+        '--identity-store-id',
+        help='Identity Store ID (auto-detected if not provided). Example: d-1234567890'
     )
     
     parser.add_argument(
@@ -758,7 +795,9 @@ Examples:
     try:
         migration = IAMToIdentityCenterMigration(
             region=args.region,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            instance_arn=args.instance_arn,
+            identity_store_id=args.identity_store_id
         )
         
         results = migration.run_migration(
