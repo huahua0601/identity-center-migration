@@ -1,0 +1,11 @@
+{
+    "region": "us-east-1",
+    "dry_run": true,
+    "groups_to_migrate": [],
+    "target_accounts": [],
+    "create_combined_permission_set": true,
+    "permission_set_session_duration": "PT8H",
+    "group_name_prefix": "",
+    "permission_set_name_prefix": ""
+}
+
