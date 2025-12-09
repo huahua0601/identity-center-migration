@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 class IAMToIdentityCenterMigration:
     """Main class for handling IAM to Identity Center migration."""
     
-    def __init__(self, region='us-east-1', dry_run=False, instance_arn=None, identity_store_id=None):
+    def __init__(self, region='us-east-1', dry_run=False, instance_arn=None, identity_store_id=None,
+                 use_customer_managed_policy_ref=False):
         """
         Initialize the migration tool.
         
@@ -44,9 +45,11 @@ class IAMToIdentityCenterMigration:
             dry_run: If True, only simulate the migration without making changes
             instance_arn: Optional Identity Center instance ARN (auto-detected if not provided)
             identity_store_id: Optional Identity Store ID (auto-detected if not provided)
+            use_customer_managed_policy_ref: If True, use Customer Managed Policy Reference instead of Inline Policy
         """
         self.region = region
         self.dry_run = dry_run
+        self.use_customer_managed_policy_ref = use_customer_managed_policy_ref
         
         # Initialize AWS clients
         self.iam_client = boto3.client('iam')
@@ -359,6 +362,40 @@ class IAMToIdentityCenterMigration:
             logger.error(f"Error attaching managed policy: {e}")
             return False
     
+    def _attach_customer_managed_policy_ref(self, permission_set_arn, policy_name, path='/'):
+        """
+        Attach a Customer Managed Policy Reference to a Permission Set.
+        
+        Args:
+            permission_set_arn: ARN of the Permission Set
+            policy_name: Name of the customer managed policy
+            path: IAM policy path (default: '/')
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would attach customer managed policy reference: {policy_name}")
+            return True
+        
+        try:
+            self.sso_admin_client.attach_customer_managed_policy_reference_to_permission_set(
+                InstanceArn=self.instance_arn,
+                PermissionSetArn=permission_set_arn,
+                CustomerManagedPolicyReference={
+                    'Name': policy_name,
+                    'Path': path
+                }
+            )
+            logger.info(f"  -> Attached Customer Managed Policy Reference: {policy_name}")
+            return True
+        except ClientError as e:
+            if 'ConflictException' in str(e):
+                logger.warning(f"  -> Policy reference already attached: {policy_name}")
+                return True
+            logger.error(f"  -> Error attaching customer managed policy reference: {e}")
+            return False
+    
     def assign_permission_set_to_group(self, permission_set_arn, group_id, account_id):
         """
         Assign a Permission Set to a group for a specific account.
@@ -601,7 +638,8 @@ class IAMToIdentityCenterMigration:
             else:
                 # Create separate Permission Set for each policy
                 for policy in group_data['attached_policies']:
-                    ps_name = f"{group_data['name']}-{policy['name']}"[:32]  # SSO name limit
+                    # Use policy name directly as Permission Set name (max 32 chars)
+                    ps_name = policy['name'][:32]
                     permission_set_arn = self.create_permission_set(
                         ps_name,
                         f"Migrated from IAM policy: {policy['name']}"
@@ -609,15 +647,58 @@ class IAMToIdentityCenterMigration:
                     
                     if permission_set_arn:
                         if policy['arn'].startswith('arn:aws:iam::aws:policy/'):
+                            # AWS Managed Policy - attach directly
                             self.attach_managed_policy_to_permission_set(
                                 permission_set_arn,
                                 policy['arn']
                             )
-                        elif policy['document']:
-                            self.attach_inline_policy_to_permission_set(
-                                permission_set_arn,
-                                policy['document']
-                            )
+                            logger.info(f"  -> Attached AWS Managed Policy: {policy['name']}")
+                        else:
+                            # Customer Managed Policy
+                            if self.use_customer_managed_policy_ref:
+                                # Use Customer Managed Policy Reference
+                                self._attach_customer_managed_policy_ref(
+                                    permission_set_arn,
+                                    policy['name']
+                                )
+                            elif policy['document']:
+                                # Fallback to inline policy
+                                self.attach_inline_policy_to_permission_set(
+                                    permission_set_arn,
+                                    policy['document']
+                                )
+                                logger.info(f"  -> Attached as Inline Policy: {policy['name']}")
+                        
+                        result['permission_sets'].append({
+                            'name': ps_name,
+                            'arn': permission_set_arn
+                        })
+                        
+                        # Assign to group for target accounts
+                        if target_accounts:
+                            for account_id in target_accounts:
+                                self.assign_permission_set_to_group(
+                                    permission_set_arn,
+                                    group_id,
+                                    account_id
+                                )
+                
+                # Handle IAM inline policies separately
+                for policy in group_data['inline_policies']:
+                    ps_name = f"{group_data['name']}-{policy['name']}"[:32]
+                    permission_set_arn = self.create_permission_set(
+                        ps_name,
+                        f"Migrated from IAM inline policy: {policy['name']}"
+                    )
+                    if permission_set_arn and policy['document']:
+                        doc = policy['document']
+                        if isinstance(doc, str):
+                            doc = json.loads(doc)
+                        self.attach_inline_policy_to_permission_set(
+                            permission_set_arn,
+                            doc
+                        )
+                        logger.info(f"  -> Created Permission Set for inline policy: {policy['name']}")
                         
                         result['permission_sets'].append({
                             'name': ps_name,
@@ -790,6 +871,12 @@ Examples:
         help='Create separate Permission Sets for each policy (default: combined)'
     )
     
+    parser.add_argument(
+        '--use-customer-managed-policy-ref',
+        action='store_true',
+        help='Use Customer Managed Policy Reference instead of Inline Policy for customer managed policies'
+    )
+    
     args = parser.parse_args()
     
     try:
@@ -797,7 +884,8 @@ Examples:
             region=args.region,
             dry_run=args.dry_run,
             instance_arn=args.instance_arn,
-            identity_store_id=args.identity_store_id
+            identity_store_id=args.identity_store_id,
+            use_customer_managed_policy_ref=args.use_customer_managed_policy_ref
         )
         
         results = migration.run_migration(

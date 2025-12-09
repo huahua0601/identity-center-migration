@@ -1,0 +1,83 @@
+{
+  "export_date": "2025-12-09T07:12:40.677275",
+  "groups": [
+    {
+      "name": "admin",
+      "arn": "arn:aws:iam::715371302281:group/admin",
+      "attached_policies": [
+        {
+          "name": "AdministratorAccess",
+          "arn": "arn:aws:iam::aws:policy/AdministratorAccess",
+          "document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "*",
+                "Resource": "*"
+              }
+            ]
+          }
+        }
+      ],
+      "inline_policies": [],
+      "users": [
+        "yaozhou",
+        "bigboss",
+        "smallboss"
+      ]
+    },
+    {
+      "name": "code-commit-cross-account",
+      "arn": "arn:aws:iam::715371302281:group/code-commit-cross-account",
+      "attached_policies": [
+        {
+          "name": "codecommit-from-198394816592",
+          "arn": "arn:aws:iam::715371302281:policy/codecommit-from-198394816592",
+          "document": {
+            "Version": "2012-10-17",
+            "Statement": {
+              "Effect": "Allow",
+              "Action": "sts:AssumeRole",
+              "Resource": "arn:aws:iam::198394816592:role/715371302281-code-commit"
+            }
+          }
+        }
+      ],
+      "inline_policies": [],
+      "users": []
+    },
+    {
+      "name": "eks-admin",
+      "arn": "arn:aws:iam::715371302281:group/eks-admin",
+      "attached_policies": [
+        {
+          "name": "eks-admin",
+          "arn": "arn:aws:iam::715371302281:policy/eks-admin",
+          "document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "eks:*",
+                  "iam:ListRoles"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": "ssm:GetParameter",
+                "Resource": "arn:aws:ssm:*:715371302281:parameter/*"
+              }
+            ]
+          }
+        }
+      ],
+      "inline_policies": [],
+      "users": [
+        "ekstest"
+      ]
+    }
+  ]
+}
